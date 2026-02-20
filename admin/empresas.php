@@ -1,10 +1,10 @@
 <?php
 session_start();
 require_once '../config/db.php';
-require_once '../includes/functions.php'; // Para usar o sistema de mensagens
+require_once '../includes/functions.php';
 
-// Proteção: Só Super Admin entra
-if (!isset($_SESSION['usuario_nivel']) || $_SESSION['usuario_nivel'] !== 'super_admin') {
+// Proteção corrigida: Só Super Admin entra
+if (!isset($_SESSION['nivel']) || $_SESSION['nivel'] !== 'super_admin') {
     header("Location: ../index.php");
     exit;
 }
@@ -31,57 +31,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_empresa'])) {
 // Busca todas as empresas
 $empresas = $pdo->query("SELECT * FROM empresas ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
 
-// --- INICIO DA ESTRUTURA VISUAL ---
-require_once '../includes/header.php';  // Carrega CSS e estrutura inicial
-require_once '../includes/sidebar.php'; // Carrega o Menu Lateral
+require_once '../includes/header.php';
+require_once '../includes/sidebar.php';
 ?>
 
 <style>
-    /* CSS ESPECÍFICO DESTA PÁGINA */
-    /* Nota: O background e fonte global já vêm do header.php */
-    
     .card-form { 
-        background: #1a1d21; 
-        padding: 25px; 
-        border-radius: 8px; 
-        border: 1px solid #464646; 
-        margin-bottom: 30px; 
-        display: flex;
-        gap: 10px;
-        align-items: center;
+        background: #1a1d21; padding: 25px; border-radius: 8px; 
+        border: 1px solid #464646; margin-bottom: 30px; display: flex; gap: 10px; align-items: center;
     }
-
     input { 
-        flex: 1; /* Ocupa todo espaço disponível */
-        padding: 12px; 
-        border-radius: 5px; 
-        border: 1px solid #464646; 
-        background: #262a30; 
-        color: white; 
-        outline: none;
+        flex: 1; padding: 12px; border-radius: 5px; border: 1px solid #464646; 
+        background: #262a30; color: white; outline: none;
     }
-    
     input:focus { border-color: var(--roxo-grow); }
-
     .btn-add { 
-        background: var(--verde-grow); /* Usa a variável global */
-        color: white; 
-        border: none; 
-        padding: 12px 25px; 
-        border-radius: 5px; 
-        cursor: pointer; 
-        font-weight: bold;
-        transition: 0.3s;
+        background: var(--verde-grow); color: white; border: none; padding: 12px 25px; 
+        border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;
     }
-
     .btn-add:hover { filter: brightness(1.1); }
-
-    /* Tabela */
     table { width: 100%; border-collapse: collapse; background: #1a1d21; border-radius: 8px; overflow: hidden; margin-top: 20px; }
-    th, td { padding: 15px; text-align: left; border-bottom: 1px solid #464646; }
+    th, td { padding: 15px; text-align: left; border-bottom: 1px solid #464646; color: white; }
     th { background: var(--roxo-grow); color: white; text-transform: uppercase; font-size: 14px; letter-spacing: 1px; }
     tr:hover { background: #262a30; }
-    
     .status-ativo { color: var(--verde-grow); font-weight: bold; }
     .status-suspenso { color: #ff4444; font-weight: bold; }
 </style>
@@ -115,13 +87,11 @@ require_once '../includes/sidebar.php'; // Carrega o Menu Lateral
             <tr>
                 <td>#<?php echo $emp['id']; ?></td>
                 <td><?php echo $emp['nome_empresa']; ?></td>
-                
                 <td>
                     <code style="background: #333; padding: 4px; border-radius: 4px; color: #fab1a0;">
                         <?php echo $emp['api_token'] ? $emp['api_token'] : 'Sem Token'; ?>
                     </code>
                 </td>
-                
                 <td class="<?php echo ($emp['status'] == 'ativo') ? 'status-ativo' : 'status-suspenso'; ?>">
                     <?php echo ucfirst($emp['status']); ?>
                 </td>

@@ -92,6 +92,12 @@ $paginaAtual = basename($_SERVER['PHP_SELF']);
             🚀 Meus Pipes (Processos)
         </a>
 
+        <?php if (isset($_SESSION['nivel']) && ($_SESSION['nivel'] === 'admin_cliente' || $_SESSION['nivel'] === 'super_admin')): ?>
+            <a href="equipe.php" class="menu-item <?php echo $paginaAtual == 'equipe.php' ? 'active' : ''; ?>">
+                👥 Minha Equipe
+            </a>
+        <?php endif; ?>
+
         <a href="#" class="menu-item" style="opacity: 0.5;">
             ✅ Minhas Tarefas (Breve)
         </a>
@@ -99,12 +105,5 @@ $paginaAtual = basename($_SERVER['PHP_SELF']);
         <a href="#" class="menu-item" style="opacity: 0.5;">
             ⚙️ Configurações
         </a>
-    </div>
-
-    <div class="sidebar-footer">
-        <div style="font-size: 12px; color: #666; margin-bottom: 10px; text-align: center;">
-            <strong style="color: white;"><?php echo $_SESSION['usuario_nome']; ?></strong>
-        </div>
-        <a href="../logout.php" class="btn-logout">Sair</a>
     </div>
 </nav>

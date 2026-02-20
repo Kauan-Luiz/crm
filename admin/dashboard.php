@@ -3,8 +3,8 @@ session_start();
 require_once '../config/db.php';
 require_once '../includes/functions.php';
 
-// Verificação de segurança
-if (!isset($_SESSION['usuario_nivel']) || $_SESSION['usuario_nivel'] !== 'super_admin') {
+// Verificação de segurança (CORRIGIDA PARA 'nivel')
+if (!isset($_SESSION['nivel']) || $_SESSION['nivel'] !== 'super_admin') {
     header("Location: ../index.php");
     exit;
 }

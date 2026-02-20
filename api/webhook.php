@@ -1,103 +1,135 @@
 <?php
 // api/webhook.php
-header("Content-Type: application/json");
-header("Access-Control-Allow-Origin: *"); // Permite requisições de fora (Make)
-header("Access-Control-Allow-Methods: POST");
-
 require_once '../config/db.php';
 
-// 1. Captura o JSON enviado pelo Make
-$json = file_get_contents('php://input');
-$data = json_decode($json, true);
+// Permite receber requisições de qualquer lugar (CORS)
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: POST");
+header("Content-Type: application/json");
 
-// 2. Valida se os dados mínimos chegaram
-if (empty($data['token_empresa']) || empty($data['pipe_id']) || empty($data['titulo'])) {
-    http_response_code(400); // Bad Request
-    echo json_encode(["erro" => "Faltando dados obrigatórios (token_empresa, pipe_id, titulo)"]);
+// 1. Pega os parâmetros da URL
+$token = filter_input(INPUT_GET, 'token', FILTER_SANITIZE_STRING);
+$pipe_id_url = filter_input(INPUT_GET, 'pipe_id', FILTER_VALIDATE_INT); // NOVO: Pega o pipe_id
+
+if (!$token) {
+    http_response_code(401);
+    echo json_encode(['erro' => 'Token não fornecido.']);
     exit;
 }
 
 try {
-    // 3. Autenticação: Verifica se o Token existe e é válido
-    $stmtEmpresa = $pdo->prepare("SELECT id FROM empresas WHERE api_token = :token AND status = 'ativo' LIMIT 1");
-    $stmtEmpresa->bindParam(':token', $data['token_empresa']);
-    $stmtEmpresa->execute();
-    $empresa = $stmtEmpresa->fetch(PDO::FETCH_ASSOC);
+    // 2. Valida o Token e descobre a Empresa
+    $stmtEmp = $pdo->prepare("SELECT id FROM empresas WHERE api_token = :token AND status = 'ativo'");
+    $stmtEmp->execute([':token' => $token]);
+    $empresa = $stmtEmp->fetch(PDO::FETCH_ASSOC);
 
     if (!$empresa) {
-        http_response_code(401); // Unauthorized
-        echo json_encode(["erro" => "Token inválido ou empresa suspensa."]);
+        http_response_code(401);
+        echo json_encode(['erro' => 'Token inválido ou empresa inativa.']);
         exit;
     }
 
-    // 4. Segurança: Verifica se o Pipe pertence mesmo a essa empresa
-    // (Impede que a Empresa A insira dados no Pipe da Empresa B usando o ID errado)
-    $stmtPipe = $pdo->prepare("SELECT id FROM pipes WHERE id = :id AND empresa_id = :empresa_id LIMIT 1");
-    $stmtPipe->bindParam(':id', $data['pipe_id']);
-    $stmtPipe->bindParam(':empresa_id', $empresa['id']);
-    $stmtPipe->execute();
+    $empresa_id = $empresa['id'];
 
-    if ($stmtPipe->rowCount() == 0) {
-        throw new Exception("Pipe não encontrado ou não pertence a esta empresa.");
+    // 3. Lê os dados que chegaram
+    $payload = file_get_contents('php://input');
+    $dados = json_decode($payload, true);
+    
+    if (!$dados) {
+        $dados = $_POST;
     }
 
-    // 5. Define a Fase Inicial (Se não vier 'fase_id' no JSON, pega a primeira do Pipe)
-    if (!empty($data['fase_id'])) {
-        $fase_id = $data['fase_id'];
-    } else {
-        $stmtFase = $pdo->prepare("SELECT id FROM phases WHERE pipe_id = :pipe_id ORDER BY ordem ASC LIMIT 1");
-        $stmtFase->bindParam(':pipe_id', $data['pipe_id']);
-        $stmtFase->execute();
-        $fase = $stmtFase->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$fase) throw new Exception("Este pipe não tem fases cadastradas.");
-        $fase_id = $fase['id'];
+    if (empty($dados)) {
+        http_response_code(400);
+        echo json_encode(['erro' => 'Nenhum dado recebido.']);
+        exit;
     }
 
-    // 6. Inicia Transação (Para garantir que salva tudo ou nada)
     $pdo->beginTransaction();
 
-    // Insere o Card
-    $sqlCard = "INSERT INTO cards (pipe_id, phase_id, titulo) VALUES (:pipe, :fase, :titulo)";
-    $stmtCard = $pdo->prepare($sqlCard);
-    $stmtCard->bindParam(':pipe', $data['pipe_id']);
-    $stmtCard->bindParam(':fase', $fase_id);
-    $stmtCard->bindParam(':titulo', $data['titulo']);
-    $stmtCard->execute();
-    
-    $card_id = $pdo->lastInsertId();
+    // 4. DESCOBRE ONDE SALVAR O LEAD (A MÁGICA DO PIPE_ID)
+    $pipe = false;
 
-    // 7. Salva os Campos Dinâmicos (Loop)
-    // No Make você mandará um objeto "campos": { "email": "x", "tel": "y" }
-    if (isset($data['campos']) && is_array($data['campos'])) {
-        $sqlVal = "INSERT INTO card_values (card_id, campo_chave, campo_valor) VALUES (:card, :chave, :valor)";
-        $stmtVal = $pdo->prepare($sqlVal);
+    // A. Tenta usar o pipe_id passado na URL (Validando se pertence à empresa!)
+    if ($pipe_id_url) {
+        $stmtPipeUrl = $pdo->prepare("SELECT id FROM pipes WHERE id = :pipe_id AND empresa_id = :empresa_id");
+        $stmtPipeUrl->execute([':pipe_id' => $pipe_id_url, ':empresa_id' => $empresa_id]);
+        $pipe = $stmtPipeUrl->fetch(PDO::FETCH_ASSOC);
+    }
 
-        foreach ($data['campos'] as $chave => $valor) {
-            // Garante que é string (caso venha número ou array do Make)
-            $valorStr = is_array($valor) ? json_encode($valor) : (string)$valor;
-            
-            $stmtVal->bindParam(':card', $card_id);
-            $stmtVal->bindParam(':chave', $chave);
-            $stmtVal->bindParam(':valor', $valorStr);
-            $stmtVal->execute();
+    // B. Se não passou na URL ou passou um ID inválido, usa o primeiro pipe que a empresa tiver (Fallback de segurança)
+    if (!$pipe) {
+        $stmtPipe = $pdo->prepare("SELECT id FROM pipes WHERE empresa_id = :empresa_id ORDER BY id ASC LIMIT 1");
+        $stmtPipe->execute([':empresa_id' => $empresa_id]);
+        $pipe = $stmtPipe->fetch(PDO::FETCH_ASSOC);
+    }
+
+    // Se a empresa for nova e não tiver absolutamente nenhum Pipe, cria um genérico
+    if (!$pipe) {
+        $pdo->exec("INSERT INTO pipes (empresa_id, nome) VALUES ($empresa_id, 'Funil Principal')");
+        $pipe_id = $pdo->lastInsertId();
+        $pdo->exec("INSERT INTO phases (pipe_id, nome, ordem) VALUES ($pipe_id, 'Novos Leads', 1)");
+        $phase_id = $pdo->lastInsertId();
+    } else {
+        $pipe_id = $pipe['id'];
+        
+        // Pega sempre a primeira fase (coluna mais à esquerda) do Pipe escolhido
+        $stmtPhase = $pdo->prepare("SELECT id FROM phases WHERE pipe_id = :pipe_id ORDER BY ordem ASC LIMIT 1");
+        $stmtPhase->execute([':pipe_id' => $pipe_id]);
+        $phase = $stmtPhase->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$phase) {
+            $pdo->exec("INSERT INTO phases (pipe_id, nome, ordem) VALUES ($pipe_id, 'Caixa de Entrada', 1)");
+            $phase_id = $pdo->lastInsertId();
+        } else {
+            $phase_id = $phase['id'];
         }
     }
 
-    $pdo->commit();
+    // 5. Tenta achar o nome do Lead
+    $titulo_card = "Novo Lead";
+    $chaves_nome = ['nome', 'name', 'first_name', 'Nome', 'Name', 'lead_name'];
+    foreach ($chaves_nome as $chave) {
+        if (!empty($dados[$chave])) {
+            $titulo_card = $dados[$chave];
+            break;
+        }
+    }
+
+    // 6. Cria o Card no Banco
+    $stmtCard = $pdo->prepare("INSERT INTO cards (pipe_id, phase_id, titulo) VALUES (:pipe, :phase, :titulo)");
+    $stmtCard->execute([':pipe' => $pipe_id, ':phase' => $phase_id, ':titulo' => $titulo_card]);
+    $card_id = $pdo->lastInsertId();
+
+    // 7. Salva os outros dados na tabela dinâmica
+    $stmtValor = $pdo->prepare("INSERT INTO card_values (card_id, campo_chave, campo_valor) VALUES (:card, :chave, :valor)");
     
-    // Resposta de Sucesso para o Make (Status 200)
+    foreach ($dados as $chave => $valor) {
+        if (is_array($valor) || is_object($valor)) {
+            $valor = json_encode($valor);
+        }
+        $stmtValor->execute([
+            ':card' => $card_id,
+            ':chave' => substr($chave, 0, 100),
+            ':valor' => $valor
+        ]);
+    }
+
+    $pdo->commit();
+
+    http_response_code(200);
     echo json_encode([
-        "status" => "sucesso", 
-        "mensagem" => "Card criado com sucesso",
-        "card_id" => $card_id
+        'status' => 'sucesso', 
+        'mensagem' => 'Lead recebido e processado!', 
+        'pipe_destino' => $pipe_id,
+        'card_id' => $card_id
     ]);
 
 } catch (Exception $e) {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    http_response_code(500); // Server Error
-    echo json_encode(["erro" => $e->getMessage()]);
+    http_response_code(500);
+    echo json_encode(['erro' => 'Erro interno ao processar webhook: ' . $e->getMessage()]);
 }
 ?>

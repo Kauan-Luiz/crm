@@ -1,50 +1,38 @@
 <?php
-// api/get_card.php
 session_start();
 require_once '../config/db.php';
 
 header("Content-Type: application/json");
 
-// 1. Segurança
 if (!isset($_SESSION['usuario_id'])) {
-    http_response_code(401);
-    echo json_encode(['erro' => 'Não autorizado']);
-    exit;
+    http_response_code(401); echo json_encode(['erro' => 'Não autorizado']); exit;
 }
 
 $card_id = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
 
-if (!$card_id) {
-    echo json_encode(['erro' => 'ID inválido']);
-    exit;
-}
-
 try {
-    // 2. Busca Dados Principais do Card
-    $stmt = $pdo->prepare("SELECT * FROM cards WHERE id = :id");
-    $stmt->bindParam(':id', $card_id);
-    $stmt->execute();
+    // Busca Card Principal
+    $stmt = $pdo->prepare("SELECT c.*, u.nome as responsavel_nome FROM cards c LEFT JOIN usuarios u ON c.responsavel_id = u.id WHERE c.id = :id");
+    $stmt->execute([':id' => $card_id]);
     $card = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$card) {
-        echo json_encode(['erro' => 'Card não encontrado']);
-        exit;
-    }
-
-    // 3. Busca Campos Dinâmicos (Vindos do Webhook)
+    // Busca Campos Extras
     $stmtVal = $pdo->prepare("SELECT campo_chave, campo_valor FROM card_values WHERE card_id = :id");
-    $stmtVal->bindParam(':id', $card_id);
-    $stmtVal->execute();
+    $stmtVal->execute([':id' => $card_id]);
     $valores = $stmtVal->fetchAll(PDO::FETCH_ASSOC);
 
-    // 4. Retorna Tudo
+    // NOVO: Busca o Histórico!
+    $stmtHist = $pdo->prepare("SELECT h.*, u.nome as usuario_nome FROM card_history h LEFT JOIN usuarios u ON h.usuario_id = u.id WHERE h.card_id = :id ORDER BY h.id DESC");
+    $stmtHist->execute([':id' => $card_id]);
+    $historico = $stmtHist->fetchAll(PDO::FETCH_ASSOC);
+
     echo json_encode([
         'card' => $card,
-        'valores' => $valores
+        'valores' => $valores,
+        'historico' => $historico // Mandando pro Javascript!
     ]);
 
 } catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode(['erro' => $e->getMessage()]);
+    http_response_code(500); echo json_encode(['erro' => $e->getMessage()]);
 }
 ?>

@@ -20,4 +20,17 @@ function getFlash($key) {
     }
     return '';
 }
+
+// Função para registrar o histórico do card
+function registrarHistorico($pdo, $card_id, $usuario_id, $acao, $detalhes = '') {
+    $sql = "INSERT INTO card_history (card_id, usuario_id, acao, detalhes) VALUES (:card_id, :usuario_id, :acao, :detalhes)";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':card_id' => $card_id,
+        ':usuario_id' => $usuario_id,
+        ':acao' => $acao,
+        ':detalhes' => $detalhes
+    ]);
+}
+
 ?>

@@ -78,14 +78,29 @@ require_once '../includes/sidebar-client.php';
     .phase-header { cursor: grab; }
     .phase-header:active { cursor: grabbing; }
 
-    /* --- NOVO: Estilo das Etiquetas (Tags) --- */
+    /* Etiquetas (Tags) */
     .color-option {
         width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
         border: 2px solid #333; transition: 0.2s;
     }
     .color-option:hover { transform: scale(1.1); border-color: white; }
-    .color-container { display: flex; gap: 15px; margin-bottom: 20px; background: #222; padding: 15px; border-radius: 8px; align-items: center; }
-    .label-tag { font-size: 12px; color: #ccc; margin-right: 10px; }
+    .config-container { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; background: #222; padding: 15px; border-radius: 8px; align-items: center; }
+    .label-tag { font-size: 12px; color: #ccc; margin-right: 10px; font-weight: bold; }
+    
+    /* Select Personalizado */
+    .select-responsavel {
+        background: #333; color: white; border: 1px solid #555; padding: 6px 10px; border-radius: 4px; outline: none; cursor: pointer;
+    }
+    .select-responsavel:focus { border-color: var(--roxo-grow); }
+
+    /* --- TIMELINE DO HISTÓRICO --- */
+    .timeline { position: relative; padding-left: 20px; margin-top: 15px; }
+    .timeline::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #333; }
+    .timeline-item { position: relative; margin-bottom: 15px; }
+    .timeline-item::before { content: ''; position: absolute; left: -24px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--roxo-grow); border: 2px solid #1a1d21; }
+    .timeline-date { font-size: 11px; color: #666; margin-bottom: 2px; }
+    .timeline-text { font-size: 13px; color: #ccc; }
+    .timeline-user { font-weight: bold; color: var(--verde-grow); }
 </style>
 
 <div class="main-content">
@@ -112,6 +127,7 @@ require_once '../includes/sidebar-client.php';
 
     <?php else: ?>
         <?php
+        // 1. Busca infos do Pipe
         $stmt = $pdo->prepare("SELECT * FROM pipes WHERE id = :id AND empresa_id = :empresa_id");
         $stmt->bindParam(':id', $pipe_id);
         $stmt->bindParam(':empresa_id', $empresa_id);
@@ -120,14 +136,36 @@ require_once '../includes/sidebar-client.php';
 
         if (!$pipe) { echo "<h2 style='color:red'>Pipe não encontrado.</h2>"; exit; }
 
+        // 2. Busca Fases do Pipe
         $fases = $pdo->prepare("SELECT * FROM phases WHERE pipe_id = :pipe_id ORDER BY ordem ASC");
         $fases->bindParam(':pipe_id', $pipe_id);
         $fases->execute();
         $listaFases = $fases->fetchAll(PDO::FETCH_ASSOC);
+
+        // BUSCA O TOKEN DA EMPRESA PARA O WEBHOOK
+        $stmtEmpresa = $pdo->prepare("SELECT api_token FROM empresas WHERE id = :empresa_id");
+        $stmtEmpresa->execute([':empresa_id' => $empresa_id]);
+        $dadosEmpresa = $stmtEmpresa->fetch(PDO::FETCH_ASSOC);
+        $meuToken = $dadosEmpresa['api_token'] ?? '';
+        
+        // MONTA A URL DE PRODUÇÃO
+        $urlWebhook = "https://growfastmarketing.com.br/grow-crm/api/webhook.php?token={$meuToken}&pipe_id={$pipe['id']}";
+
+        // 3. Busca a Equipe (Usuários desta empresa para o Dropdown)
+        $usuariosStmt = $pdo->prepare("SELECT id, nome FROM usuarios WHERE empresa_id = :empresa_id OR empresa_id IS NULL");
+        $usuariosStmt->execute([':empresa_id' => $empresa_id]);
+        $listaUsuarios = $usuariosStmt->fetchAll(PDO::FETCH_ASSOC);
         ?>
 
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h1 style="color: var(--roxo-grow);"><?php echo $pipe['nome']; ?></h1>
+       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <h1 style="color: var(--roxo-grow); margin: 0;"><?php echo $pipe['nome']; ?></h1>
+                
+                <button onclick="copiarWebhook()" style="background: rgba(80, 0, 108, 0.2); border: 1px solid var(--roxo-grow); color: var(--roxo-grow); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; transition: 0.2s;" title="Copiar link para receber leads">
+                    🔗 Copiar Webhook
+                </button>
+            </div>
+            
             <a href="kanban.php" class="btn" style="background: #333; color: white; font-size: 12px;">Voltar</a>
         </div>
 
@@ -153,10 +191,11 @@ require_once '../includes/sidebar-client.php';
 
                 <div class="kanban-coluna" data-phase-id="<?php echo $fase['id']; ?>" style="padding: 10px; flex: 1; overflow-y: auto; min-height: 50px;">
                     <?php
-                    // --- SQL ATUALIZADO: Trazendo a cor da etiqueta (LEFT JOIN) ---
-                    $sql = "SELECT c.*, cv.campo_valor as etiqueta_cor 
+                    // --- SQL ATUALIZADO: Busca Etiqueta E Responsável (u.nome) ---
+                    $sql = "SELECT c.*, cv.campo_valor as etiqueta_cor, u.nome as responsavel_nome 
                             FROM cards c 
                             LEFT JOIN card_values cv ON c.id = cv.card_id AND cv.campo_chave = 'etiqueta'
+                            LEFT JOIN usuarios u ON c.responsavel_id = u.id
                             WHERE c.phase_id = :fase_id 
                             ORDER BY c.id DESC";
 
@@ -165,7 +204,6 @@ require_once '../includes/sidebar-client.php';
                     $cards = $cardsStmt->fetchAll(PDO::FETCH_ASSOC);
 
                     foreach ($cards as $card):
-                        // Define a cor (ou transparente se não tiver)
                         $corFaixa = !empty($card['etiqueta_cor']) ? $card['etiqueta_cor'] : 'transparent';
                     ?>
                         <div class="kanban-card" onclick="abrirCard(<?php echo $card['id']; ?>)" data-card-id="<?php echo $card['id']; ?>" 
@@ -173,8 +211,18 @@ require_once '../includes/sidebar-client.php';
                             
                             <div class="card-tag-visual" id="tag-visual-<?php echo $card['id']; ?>" style="position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background-color: <?php echo $corFaixa; ?>;"></div>
                             
-                            <div style="font-weight: bold; color: white; margin-bottom: 8px; padding-left: 8px;"><?php echo $card['titulo']; ?></div>
+                            <div style="font-weight: bold; color: white; margin-bottom: 8px; padding-left: 8px; padding-right: 25px;"><?php echo $card['titulo']; ?></div>
                             <div style="font-size: 11px; color: #9ca3af; padding-left: 8px;">#<?php echo $card['id']; ?></div>
+
+                            <?php if(!empty($card['responsavel_nome'])): 
+                                $inicial = strtoupper(substr($card['responsavel_nome'], 0, 1));
+                            ?>
+                                <div title="Responsável: <?php echo $card['responsavel_nome']; ?>" 
+                                     style="position: absolute; right: 10px; bottom: 10px; width: 22px; height: 22px; border-radius: 50%; background: var(--roxo-grow); color: white; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">
+                                    <?php echo $inicial; ?>
+                                </div>
+                            <?php endif; ?>
+
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -204,13 +252,29 @@ require_once '../includes/sidebar-client.php';
         </div>
         <div class="modal-body">
             
-            <div class="color-container">
-                <span class="label-tag">Etiqueta:</span>
-                <div class="color-option" style="background-color: #ff4444;" onclick="salvarEtiqueta('#ff4444')" title="Urgente"></div>
-                <div class="color-option" style="background-color: #ffbb33;" onclick="salvarEtiqueta('#ffbb33')" title="Atenção"></div>
-                <div class="color-option" style="background-color: #00C851;" onclick="salvarEtiqueta('#00C851')" title="Bom"></div>
-                <div class="color-option" style="background-color: #33b5e5;" onclick="salvarEtiqueta('#33b5e5')" title="Frio"></div>
-                <div class="color-option" style="background-color: transparent; border: 2px dashed #666;" onclick="salvarEtiqueta('')" title="Sem etiqueta"></div>
+            <div class="config-container">
+                
+                <div style="display:flex; align-items:center; margin-right: 20px;">
+                    <span class="label-tag">👤 Responsável:</span>
+                    <select id="selectResponsavel" class="select-responsavel" onchange="salvarResponsavel(this.value)">
+                        <option value="">Ninguém</option>
+                        <?php if(isset($listaUsuarios)): ?>
+                            <?php foreach($listaUsuarios as $user): ?>
+                                <option value="<?php echo $user['id']; ?>"><?php echo $user['nome']; ?></option>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </select>
+                </div>
+
+                <div style="display:flex; align-items:center;">
+                    <span class="label-tag">🎨 Etiqueta:</span>
+                    <div class="color-option" style="background-color: #ff4444;" onclick="salvarEtiqueta('#ff4444')" title="Urgente"></div>
+                    <div class="color-option" style="background-color: #ffbb33;" onclick="salvarEtiqueta('#ffbb33')" title="Atenção"></div>
+                    <div class="color-option" style="background-color: #00C851;" onclick="salvarEtiqueta('#00C851')" title="Bom"></div>
+                    <div class="color-option" style="background-color: #33b5e5;" onclick="salvarEtiqueta('#33b5e5')" title="Frio"></div>
+                    <div class="color-option" style="background-color: transparent; border: 2px dashed #666;" onclick="salvarEtiqueta('')" title="Sem etiqueta"></div>
+                </div>
+
             </div>
 
             <div style="margin-bottom: 20px; color: #666; font-size: 12px;">
@@ -219,6 +283,9 @@ require_once '../includes/sidebar-client.php';
             
             <h3 style="color: var(--roxo-grow); font-size: 14px; margin-bottom: 15px; text-transform: uppercase;">Dados do Cliente</h3>
             <div id="modalCamposArea"></div>
+
+            <h3 style="color: var(--roxo-grow); font-size: 14px; margin-top: 30px; margin-bottom: 15px; text-transform: uppercase;">Histórico de Atividades</h3>
+            <div id="modalHistoricoArea" class="timeline"></div>
         </div>
     </div>
 </div>
@@ -266,9 +333,12 @@ require_once '../includes/sidebar-client.php';
         const titleEl = document.getElementById('modalTitle');
         const dataEl = document.getElementById('modalData');
         const areaCampos = document.getElementById('modalCamposArea');
+        const selectResp = document.getElementById('selectResponsavel');
+        const areaHistorico = document.getElementById('modalHistoricoArea'); // Variável da Timeline
 
         modal.style.display = 'block';
         areaCampos.innerHTML = '<div style="text-align:center; padding:20px; color:#666">Buscando informações...</div>';
+        areaHistorico.innerHTML = ''; // Limpa antes de carregar
 
         fetch('../api/get_card.php?id=' + id)
             .then(response => response.json())
@@ -277,11 +347,14 @@ require_once '../includes/sidebar-client.php';
 
                 titleEl.innerText = data.card.titulo;
                 dataEl.innerText = new Date(data.card.data_criacao).toLocaleString('pt-BR');
+                
+                // Preenche o Select do Responsável
+                selectResp.value = data.card.responsavel_id || "";
+
                 areaCampos.innerHTML = ''; 
                 
                 if (data.valores.length > 0) {
                     data.valores.forEach(item => {
-                        // IMPORTANTE: Se a chave for 'etiqueta', não mostra como texto (pois já tem a bolinha)
                         if(item.campo_chave !== 'etiqueta') {
                             criarLinhaCampo(item.campo_chave, item.campo_valor);
                         }
@@ -289,30 +362,60 @@ require_once '../includes/sidebar-client.php';
                 } else {
                     areaCampos.innerHTML = '<p id="msgVazio" style="color:#666; font-style:italic;">Nenhum dado extra.</p>';
                 }
+
+                // --- MONTA A TIMELINE DO HISTÓRICO ---
+                if (data.historico && data.historico.length > 0) {
+                    data.historico.forEach(hist => {
+                        const dataFormatada = new Date(hist.data_hora).toLocaleString('pt-BR');
+                        const userNome = hist.usuario_nome ? hist.usuario_nome : 'Sistema/Webhook';
+
+                        const htmlHist = `
+                            <div class="timeline-item">
+                                <div class="timeline-date">${dataFormatada}</div>
+                                <div class="timeline-text">
+                                    <span class="timeline-user">${userNome}</span> ${hist.acao}
+                                    <div style="font-size: 12px; color: #999; margin-top: 2px;">${hist.detalhes}</div>
+                                </div>
+                            </div>
+                        `;
+                        areaHistorico.insertAdjacentHTML('beforeend', htmlHist);
+                    });
+                } else {
+                    areaHistorico.innerHTML = '<p style="color:#666; font-size: 12px; font-style:italic;">Nenhuma movimentação registrada.</p>';
+                }
             })
             .catch(err => console.error(err));
     }
 
-    // --- Nova Função: Salvar a Cor (Etiqueta) ---
-    function salvarEtiqueta(cor) {
+    // --- Funções de Salvar e Copiar ---
+    function salvarResponsavel(userId) {
         if(!cardAtualId) return;
 
-        // Atualiza no Backend
-        fetch('../api/save_field.php', {
+        fetch('../api/assign_user.php', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 card_id: cardAtualId,
-                chave: 'etiqueta',
-                valor: cor
+                responsavel_id: userId
             })
+        }).then(r => r.json()).then(d => {
+            if(d.status === 'sucesso') {
+                location.reload(); 
+            } else {
+                alert("Erro ao atribuir responsável!");
+            }
+        });
+    }
+
+    function salvarEtiqueta(cor) {
+        if(!cardAtualId) return;
+        fetch('../api/save_field.php', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ card_id: cardAtualId, chave: 'etiqueta', valor: cor })
         }).then(r => console.log('Cor salva!'));
 
-        // Atualiza Visualmente no Kanban (instantâneo)
         const visualTag = document.getElementById('tag-visual-' + cardAtualId);
-        if(visualTag) {
-            visualTag.style.backgroundColor = cor ? cor : 'transparent';
-        }
+        if(visualTag) visualTag.style.backgroundColor = cor ? cor : 'transparent';
     }
 
     function fecharModal() { document.getElementById('cardModal').style.display = 'none'; }
@@ -396,6 +499,18 @@ require_once '../includes/sidebar-client.php';
                     if(cardVisual) cardVisual.remove();
                     fecharModal();
                 }
+            });
+        }
+    }
+
+    // --- Função para Copiar o Webhook ---
+    function copiarWebhook() {
+        const url = "<?php echo $urlWebhook ?? ''; ?>";
+        if(url) {
+            navigator.clipboard.writeText(url).then(() => {
+                alert("✅ Link do Webhook copiado com sucesso!\n\nCole este link no seu Elementor, Make ou Typeform para receber leads direto neste Pipe.");
+            }).catch(err => {
+                alert("Erro ao copiar o link. Tente copiar manualmente: " + url);
             });
         }
     }
